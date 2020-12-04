@@ -20,7 +20,8 @@ logging.basicConfig(
     datefmt='%Y/%m/%d %H:%M:%S',
     level=logging.DEBUG)
 
-
+cifar10_mean = (0.4914, 0.4822, 0.4465)
+cifar10_std = (0.2471, 0.2435, 0.2616)
 mu = torch.tensor(cifar10_mean).view(3,1,1).cuda()
 std = torch.tensor(cifar10_std).view(3,1,1).cuda()
 
@@ -93,8 +94,8 @@ class Batches():
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch-size', default=100, type=int)
-    parser.add_argument('--data-dir', default='../cifar-data', type=str)
-    parser.add_argument('--fname', type=str)
+    parser.add_argument('--data-dir', default='./cifar-data', type=str)
+    parser.add_argument('--fname', default='cifar_model.pth', type=str)
     parser.add_argument('--attack', default='pgd', type=str, choices=['pgd', 'fgsm', 'ddn', 'none'])
     parser.add_argument('--epsilon', default=8, type=float)
     parser.add_argument('--attack-iters', default=50, type=int)
@@ -113,7 +114,17 @@ def main():
     torch.cuda.manual_seed(args.seed)
 
     dataset = cifar10(args.data_dir)
-    test_set = list(zip(transpose(normalise(dataset['test']['data'])), dataset['test']['labels']))
+
+    test_set = list(zip(
+        transpose(
+            normalise(
+                dataset['valid']['data'].astype(np.float32) / 255,
+                mean=np.array(cifar10_mean, dtype=np.float32),
+                std=np.array(cifar10_std, dtype=np.float32)),
+            source='NHWC',
+            target='NCHW'),
+        dataset['valid']['targets']))
+
     batches = Batches(test_set, args.batch_size, shuffle=False, num_workers=2)
 
     epsilon = (args.epsilon / 255.) / std

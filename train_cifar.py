@@ -88,7 +88,7 @@ class Batches():
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch-size', default=128, type=int)
-    parser.add_argument('--data-dir', default='../cifar-data', type=str)
+    parser.add_argument('--data-dir', default='./cifar-data', type=str)
     parser.add_argument('--epochs', default=15, type=int)
     parser.add_argument('--lr-schedule', default='cyclic', choices=['cyclic', 'piecewise'])
     parser.add_argument('--lr-max', default=0.21, type=float)
@@ -116,8 +116,17 @@ def main():
     start_start_time = time.time()
     transforms = [Crop(32, 32), FlipLR()]
     dataset = cifar10(args.data_dir)
-    train_set = list(zip(transpose(normalise(pad(dataset['train']['data'], 4))),
-        dataset['train']['labels']))
+
+    train_set = list(zip(
+        transpose(
+            normalise(
+                pad(dataset['train']['data'].astype(np.float32) / 255,
+                    border=4),
+                mean=np.array(cifar10_mean, dtype=np.float32),
+                std=np.array(cifar10_std, dtype=np.float32)),
+            source='NHWC',
+            target='NCHW'),
+        dataset['train']['targets']))
     train_set_x = Transform(train_set, transforms)
     train_batches = Batches(train_set_x, args.batch_size, shuffle=True, set_random_choices=True, num_workers=2)
 
@@ -167,6 +176,7 @@ def main():
         train_n = 0
         for i, batch in enumerate(train_batches):
             X, y = batch['input'], batch['target']
+
             if i == 0:
                 first_batch = batch
             lr = lr_schedule(epoch + (i + 1) / len(train_batches))
