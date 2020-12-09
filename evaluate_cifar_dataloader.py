@@ -12,7 +12,6 @@ from torchvision import datasets, transforms
 from preact_resnet import PreActResNet18
 from utils import *
 
-
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     format='[%(asctime)s] - %(message)s',
@@ -65,13 +64,12 @@ def get_args():
     parser.add_argument('--batch-size', default=100, type=int)
     parser.add_argument('--data-dir', default='./cifar-data', type=str)
     parser.add_argument('--fname', default='cifar_model.pth', type=str)
+    parser.add_argument('--attack', default='pgd', type=str, choices=['pgd', 'fgsm', 'ddn', 'none'])
     parser.add_argument('--epsilon', default=8, type=float)
     parser.add_argument('--attack-iters', default=50, type=int)
     parser.add_argument('--alpha', default=2, type=int)
     parser.add_argument('--restarts', default=10, type=int)
     parser.add_argument('--seed', default=0, type=int)
-    parser.add_argument('--intvl', default='5,55,5', type=str)
-    parser.add_argument('--attack', default='none,pgd', type=str)
     return parser.parse_args()
 
 
@@ -94,70 +92,44 @@ def main():
         dataset, batch_size=args.batch_size, num_workers=2,
         pin_memory=True, shuffle=False, drop_last=False)
 
+
     epsilon = (args.epsilon / 255.) / std
     alpha = (args.alpha / 255.) / std
 
     model = PreActResNet18().cuda()
+    checkpoint = torch.load(args.fname)
+    model.load_state_dict(checkpoint)
+    model.eval()
+    model.float()
 
-    intvl = [int(x) for x in args.intvl.split(',')]
-    attack = set(args.attack.split(','))
-    stats = {'epoch': [], 'none': [], 'pgd': []}
+    total_loss = 0
+    total_acc = 0
+    n = 0
 
-    logger.info('Epoch \t Standard \t PGD')
-    for epoch in range(intvl[0], intvl[1], intvl[2]):
-        epoch_name = args.fname + '_{}.pth'.format(epoch)
-        checkpoint = torch.load(epoch_name)
-
-        model.load_state_dict(checkpoint)
-        model.eval()
-        model.float()
-
-        msg = "{} \t ".format(epoch)
-        if 'none' in attack:
-            # test none attack
-            none_total_loss = 0
-            none_total_acc = 0
-            none_n = 0
-
-            with torch.no_grad():
-                for X, y in dataloader:
-                    X, y = X.to(device), y.to(device)
-                    output = model(X)
-                    loss = F.cross_entropy(output, y)
-                    none_total_loss += loss.item() * y.size(0)
-                    none_total_acc += (output.max(1)[1] == y).sum().item()
-                    none_n += y.size(0)
-
-            msg += "{:.4f} \t ".format(none_total_acc / none_n)
-            stats['none'].append(none_total_acc / none_n)
-        else:
-            msg += "- \t "
-
-        if 'pgd' in attack:
-            # test pgd
-            pgd_total_loss = 0
-            pgd_total_acc = 0
-            pgd_n = 0.1
-
+    if args.attack == 'none':
+        with torch.no_grad():
             for X, y in dataloader:
                 X, y = X.to(device), y.to(device)
+                output = model(X)
+                loss = F.cross_entropy(output, y)
+                total_loss += loss.item() * y.size(0)
+                total_acc += (output.max(1)[1] == y).sum().item()
+                n += y.size(0)
+    else:
+        for X, y in dataloader:
+            X, y = X.to(device), y.to(device)
+            if args.attack == 'pgd':
                 delta = attack_pgd(model, X, y, epsilon, alpha, args.attack_iters, args.restarts)
-                with torch.no_grad():
-                    output = model(X + delta)
-                    loss = F.cross_entropy(output, y)
-                    pgd_total_loss += loss.item() * y.size(0)
-                    pgd_total_acc += (output.max(1)[1] == y).sum().item()
-                    pgd_n += y.size(0)
+            elif args.attack == 'fgsm':
+                delta = attack_fgsm(model, X, y, epsilon)
+            with torch.no_grad():
+                output = model(X + delta)
+                loss = F.cross_entropy(output, y)
+                total_loss += loss.item() * y.size(0)
+                total_acc += (output.max(1)[1] == y).sum().item()
+                n += y.size(0)
 
-            msg += "{:.4f}".format(pgd_total_acc / pgd_n)
-            stats['pgd'].append(pgd_total_acc / pgd_n)
-        else:
-            msg += "-"
-
-        stats['epoch'].append(epoch)
-        logger.info(msg)
-
-    logger.info(stats)
+    logger.info('Test Loss: %.4f, Acc: %.4f', total_loss/n, total_acc/n)
 
 
 if __name__ == "__main__":
